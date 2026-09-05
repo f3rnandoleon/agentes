@@ -1,0 +1,2 @@
+"use client";
+export default function ModeToggle({mode,onChange}:{mode:"AI"|"HUMAN";onChange:(m:"AI"|"HUMAN")=>void}){return <div className="flex rounded-lg bg-stone-100 p-1 text-xs"><button onClick={()=>onChange("AI")} className={`rounded-md px-3 py-1.5 ${mode==="AI"?"bg-emerald-600 text-white":"text-stone-500"}`}>IA</button><button onClick={()=>onChange("HUMAN")} className={`rounded-md px-3 py-1.5 ${mode==="HUMAN"?"bg-amber-500 text-white":"text-stone-500"}`}>HUMANO</button></div>}
