@@ -4,4 +4,5 @@ declare module "next" {
 declare module "next/server" {
   export type NextRequest = Request & { nextUrl?: URL };
   export const NextResponse: any;
+  export function after(callback: () => void | Promise<void>): void;
 }
