@@ -1,38 +1,32 @@
-import Database from "better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type Mode = "AI" | "HUMAN";
 export type Role = "user" | "assistant" | "human";
 export type Conversation = { id: number; phone: string; name: string | null; mode: Mode; last_message_at: number | null; created_at: number; last_message_preview?: string | null };
 export type Message = { id: number; conversation_id: number; role: Role; content: string; wa_message_id: string | null; created_at: number };
 
-const dataDir = path.join(process.cwd(), "data");
-fs.mkdirSync(dataDir, { recursive: true });
-const db = new Database(path.join(dataDir, "messages.db"));
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
-db.exec(`CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT UNIQUE NOT NULL, name TEXT, mode TEXT CHECK(mode IN ('AI','HUMAN')) NOT NULL DEFAULT 'AI', last_message_at INTEGER, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
-CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), role TEXT CHECK(role IN ('user','assistant','human')) NOT NULL, content TEXT NOT NULL, wa_message_id TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
-CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_wa_id ON messages(wa_message_id) WHERE wa_message_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS processed_webhook_messages (wa_message_id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL DEFAULT (unixepoch()));`);
+let client: SupabaseClient | undefined;
+function supabase() {
+  if (client) return client;
+  const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY no configurada");
+  client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return client;
+}
+function fail(error: { message: string } | null) { if (error) throw new Error(`Supabase: ${error.message}`); }
 
-export function getOrCreateConversation(phone: string, name?: string | null): Conversation {
-  const existing = db.prepare("SELECT * FROM conversations WHERE phone = ?").get(phone) as Conversation | undefined;
-  if (existing) { if (name && !existing.name) db.prepare("UPDATE conversations SET name=? WHERE id=?").run(name, existing.id); return existing; }
-  const result = db.prepare("INSERT INTO conversations (phone,name) VALUES (?,?)").run(phone, name ?? null);
-  return db.prepare("SELECT * FROM conversations WHERE id=?").get(result.lastInsertRowid) as Conversation;
+export async function getOrCreateConversation(phone: string, name?: string | null): Promise<Conversation> {
+  const db = supabase(); const { data: existing, error: lookupError } = await db.from("conversations").select("*").eq("phone", phone).maybeSingle(); fail(lookupError);
+  if (existing) { if (name && !existing.name) { const { data, error } = await db.from("conversations").update({ name }).eq("id", existing.id).select("*").single(); fail(error); return data as Conversation; } return existing as Conversation; }
+  const { data, error } = await db.from("conversations").insert({ phone, name: name ?? null }).select("*").single(); fail(error); return data as Conversation;
 }
-export const getConversationById = (id: number) => db.prepare("SELECT * FROM conversations WHERE id=?").get(id) as Conversation | undefined;
-export function insertMessage(conversationId: number, role: Role, content: string, waMessageId?: string | null) {
-  const tx = db.transaction(() => { const r = db.prepare("INSERT INTO messages (conversation_id,role,content,wa_message_id) VALUES (?,?,?,?)").run(conversationId, role, content, waMessageId ?? null); db.prepare("UPDATE conversations SET last_message_at=unixepoch() WHERE id=?").run(conversationId); return Number(r.lastInsertRowid); }); return tx();
-}
-export const updateMessageWaId = (id: number, waId: string) => db.prepare("UPDATE messages SET wa_message_id=? WHERE id=?").run(waId, id);
-export const getMessages = (id: number, limit = 50) => db.prepare("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at DESC, id DESC LIMIT ?").all(id, limit).reverse() as Message[];
-export const getRecentHistory = (id: number, limit = 20) => getMessages(id, limit).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.content }));
-export const setMode = (id: number, mode: Mode) => db.prepare("UPDATE conversations SET mode=? WHERE id=?").run(mode, id);
-export const listConversations = () => db.prepare("SELECT c.*, (SELECT content FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) last_message_preview FROM conversations c ORDER BY c.last_message_at DESC, c.id DESC").all() as Conversation[];
-export function deleteConversation(id: number) { const tx = db.transaction(() => { db.prepare("DELETE FROM messages WHERE conversation_id=?").run(id); db.prepare("DELETE FROM conversations WHERE id=?").run(id); }); tx(); }
-export const wasMessageProcessed = (id: string) => Boolean(db.prepare("SELECT 1 FROM processed_webhook_messages WHERE wa_message_id=?").get(id));
-export const markMessageProcessed = (id: string) => db.prepare("INSERT OR IGNORE INTO processed_webhook_messages (wa_message_id) VALUES (?)").run(id);
+export async function getConversationById(id: number): Promise<Conversation | undefined> { const { data, error } = await supabase().from("conversations").select("*").eq("id", id).maybeSingle(); fail(error); return (data as Conversation | null) ?? undefined; }
+export async function insertMessage(conversationId: number, role: Role, content: string, waMessageId?: string | null) { const db = supabase(); const { data, error } = await db.from("messages").insert({ conversation_id: conversationId, role, content, wa_message_id: waMessageId ?? null }).select("id").single(); fail(error); if (!data) throw new Error("Supabase no devolvió el mensaje insertado"); const { error: updateError } = await db.from("conversations").update({ last_message_at: Math.floor(Date.now() / 1000) }).eq("id", conversationId); fail(updateError); return Number(data.id); }
+export async function updateMessageWaId(id: number, waId: string) { const { error } = await supabase().from("messages").update({ wa_message_id: waId }).eq("id", id); fail(error); }
+export async function getMessages(id: number, limit = 50): Promise<Message[]> { const { data, error } = await supabase().from("messages").select("*").eq("conversation_id", id).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit); fail(error); return (data ?? []).reverse() as Message[]; }
+export async function getRecentHistory(id: number, limit = 20) { return (await getMessages(id, limit)).map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.content })); }
+export async function setMode(id: number, mode: Mode) { const { error } = await supabase().from("conversations").update({ mode }).eq("id", id); fail(error); }
+export async function listConversations(): Promise<Conversation[]> { const { data, error } = await supabase().from("conversation_summaries").select("*").order("last_message_at", { ascending: false, nullsFirst: false }).order("id", { ascending: false }); fail(error); return (data ?? []) as Conversation[]; }
+export async function deleteConversation(id: number) { const { error } = await supabase().from("conversations").delete().eq("id", id); fail(error); }
+export async function wasMessageProcessed(id: string) { const { data, error } = await supabase().from("processed_webhook_messages").select("wa_message_id").eq("wa_message_id", id).maybeSingle(); fail(error); return Boolean(data); }
+export async function markMessageProcessed(id: string) { const { error } = await supabase().from("processed_webhook_messages").upsert({ wa_message_id: id }, { onConflict: "wa_message_id", ignoreDuplicates: true }); fail(error); }
