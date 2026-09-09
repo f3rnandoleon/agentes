@@ -4,6 +4,7 @@ export type Mode = "AI" | "HUMAN";
 export type Role = "user" | "assistant" | "human";
 export type Conversation = { id: number; phone: string; name: string | null; mode: Mode; last_message_at: number | null; created_at: number; last_message_preview?: string | null };
 export type Message = { id: number; conversation_id: number; role: Role; content: string; wa_message_id: string | null; created_at: number };
+export type WhatsAppOrder = { id: number; conversation_id: number; numero_pedido: string; pago_id: string; estado: string; created_at: number };
 
 let client: SupabaseClient | undefined;
 function supabase() {
@@ -30,3 +31,6 @@ export async function listConversations(): Promise<Conversation[]> { const { dat
 export async function deleteConversation(id: number) { const { error } = await supabase().from("conversations").delete().eq("id", id); fail(error); }
 export async function wasMessageProcessed(id: string) { const { data, error } = await supabase().from("processed_webhook_messages").select("wa_message_id").eq("wa_message_id", id).maybeSingle(); fail(error); return Boolean(data); }
 export async function markMessageProcessed(id: string) { const { error } = await supabase().from("processed_webhook_messages").upsert({ wa_message_id: id }, { onConflict: "wa_message_id", ignoreDuplicates: true }); fail(error); }
+export async function saveWhatsAppOrder(conversationId:number, order:{numeroPedido:string;pagoId:string;estado:string}) { const { error }=await supabase().from("whatsapp_orders").upsert({conversation_id:conversationId,numero_pedido:order.numeroPedido,pago_id:order.pagoId,estado:order.estado},{onConflict:"numero_pedido"}); fail(error); }
+export async function latestPendingWhatsAppOrder(conversationId:number):Promise<WhatsAppOrder|undefined> { const {data,error}=await supabase().from("whatsapp_orders").select("*").eq("conversation_id",conversationId).eq("estado","PENDING_PAYMENT").order("id",{ascending:false}).limit(1).maybeSingle(); fail(error); return (data as WhatsAppOrder|null)??undefined; }
+export async function setWhatsAppOrderStatus(numeroPedido:string,estado:string) { const {error}=await supabase().from("whatsapp_orders").update({estado}).eq("numero_pedido",numeroPedido); fail(error); }
