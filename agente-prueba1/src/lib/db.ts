@@ -16,7 +16,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOIN
 CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), role TEXT CHECK(role IN ('user','assistant','human')) NOT NULL, content TEXT NOT NULL, wa_message_id TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_wa_id ON messages(wa_message_id) WHERE wa_message_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS processed_webhook_messages (wa_message_id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL DEFAULT (unixepoch()));`);
+CREATE TABLE IF NOT EXISTS processed_webhook_messages (wa_message_id TEXT PRIMARY KEY, processed_at INTEGER NOT NULL DEFAULT (unixepoch()));
+CREATE TABLE IF NOT EXISTS sales_contexts (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_name TEXT, agent_color TEXT, category TEXT NOT NULL, title TEXT NOT NULL, description TEXT, steps TEXT NOT NULL, variables TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));`);
 
 export function getOrCreateConversation(phone: string, name?: string | null): Conversation {
   const existing = db.prepare("SELECT * FROM conversations WHERE phone = ?").get(phone) as Conversation | undefined;
