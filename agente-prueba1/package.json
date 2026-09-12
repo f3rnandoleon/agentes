@@ -12,15 +12,15 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "@supabase/supabase-js": "^2.49.8",
     "next": "^16.0.0",
     "openai": "^4.77.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
-    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
