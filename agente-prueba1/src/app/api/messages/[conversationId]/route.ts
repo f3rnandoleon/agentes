@@ -13,3 +13,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
   try { const sent = await sendTextMessage(c.phone, content); await updateMessageWaId(messageId, sent.wa_message_id); return NextResponse.json({ ok: true, messageId }); }
   catch (e: any) { return NextResponse.json({ ok: false, messageId, error: String(e?.message ?? e) }, { status: 502 }); }
 }
+
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ conversationId: string }> }) {
+  const { deleteMessages } = await import("@/lib/db");
+  const id = Number((await params).conversationId);
+  await deleteMessages(id);
+  return NextResponse.json({ ok: true });
+}
