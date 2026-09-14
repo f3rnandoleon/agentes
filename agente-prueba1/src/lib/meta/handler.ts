@@ -6,11 +6,11 @@ export async function processWebhookPayload(payload: any) { if(payload?.object!=
 export async function handleIncomingMessage(msg:any, name:string|null) {
   if(!msg?.id||!msg?.from) return;
   if(msg.type!=="text"&&msg.type!=="image") { console.log(`[webhook] tipo no soportado: ${msg.type}`); return; }
-  if(await wasMessageProcessed(msg.id)) return;
-  await markMessageProcessed(msg.id);
+  if(await wasMessageProcessed(msg.id)) { console.log(`[webhook] mensaje ya procesado previamente: ${msg.id}`); return; }
   const conversation=await getOrCreateConversation(msg.from,name);
   const incoming=msg.type==="text"?msg.text?.body:"[Imagen recibida]";
   await insertMessage(conversation.id,"user",incoming,msg.id);
+  await markMessageProcessed(msg.id);
   const fresh=await getConversationById(conversation.id);
   if(!fresh||fresh.mode!=="AI") return;
   const started=Date.now();
