@@ -13,10 +13,10 @@ type VariantOption = { numero:number; productoId:string; nombre:string; modelo:s
 
 const ownerPhone="59167113105";
 const tools:any[]=[
-  {type:"function",function:{name:"buscar_modelos",description:"Busca modelos compatibles en la base real. Requiere categoría y talla; muestra un collage con una sola imagen por modelo y solo variantes disponibles.",parameters:{type:"object",properties:{categoria:{type:"string"},talla:{type:"string"},color:{type:"string"},q:{type:"string",description:"Estilo, material, modelo u otro filtro textual del cliente."}},required:["categoria","talla"],additionalProperties:false}}},
-  {type:"function",function:{name:"obtener_variantes_modelo",description:"Después de que el cliente elija un modelo, obtiene y muestra únicamente sus variantes disponibles para la talla elegida.",parameters:{type:"object",properties:{productoId:{type:"string"},talla:{type:"string"}},required:["productoId","talla"],additionalProperties:false}}},
-  {type:"function",function:{name:"seleccionar_variante",description:"Valida la variante elegida contra los datos actuales y guarda la selección exacta antes de preguntar cantidad.",parameters:{type:"object",properties:{productoId:{type:"string"},varianteId:{type:"string"},talla:{type:"string"}},required:["productoId","varianteId","talla"],additionalProperties:false}}},
-  {type:"function",function:{name:"verificar_stock",description:"Consulta nuevamente el producto en la base real y verifica el stock disponible para la variante exacta y cantidad solicitada. Úsala siempre antes de confirmar cantidad o continuar la compra.",parameters:{type:"object",properties:{productoId:{type:"string"},varianteId:{type:"string"},talla:{type:"string"},cantidad:{type:"integer",minimum:1}},required:["productoId","varianteId","talla","cantidad"],additionalProperties:false}}},
+  {type:"function",function:{name:"buscar_modelos",description:"Busca modelos compatibles en la base real. Requiere categoría (Chompas, Poleras, Ruanas). La talla es opcional (ej. 'M', 'L', 'S, M, L, XL', 'todas'); si no se especifica o el cliente quiere ver todo, muestra todos los modelos disponibles.",parameters:{type:"object",properties:{categoria:{type:"string",description:"Categoría del producto: Chompas, Poleras o Ruanas."},talla:{type:"string",description:"Talla o lista de tallas solicitadas (ej. 'M', 'L', 'S, M, L, XL', 'todas'). Opcional."},color:{type:"string"},q:{type:"string",description:"Estilo, material, modelo u otro filtro textual del cliente."}},required:["categoria"],additionalProperties:false}}},
+  {type:"function",function:{name:"obtener_variantes_modelo",description:"Después de que el cliente elija un modelo, obtiene y muestra únicamente sus variantes disponibles.",parameters:{type:"object",properties:{productoId:{type:"string"},talla:{type:"string",description:"Talla o tallas a filtrar. Opcional."}},required:["productoId"],additionalProperties:false}}},
+  {type:"function",function:{name:"seleccionar_variante",description:"Valida la variante elegida contra los datos actuales y guarda la selección exacta antes de preguntar cantidad.",parameters:{type:"object",properties:{productoId:{type:"string"},varianteId:{type:"string"},talla:{type:"string"}},required:["productoId","varianteId"],additionalProperties:false}}},
+  {type:"function",function:{name:"verificar_stock",description:"Consulta nuevamente el producto en la base real y verifica el stock disponible para la variante exacta y cantidad solicitada. Úsala siempre antes de confirmar cantidad o continuar la compra.",parameters:{type:"object",properties:{productoId:{type:"string"},varianteId:{type:"string"},talla:{type:"string"},cantidad:{type:"integer",minimum:1}},required:["productoId","varianteId","cantidad"],additionalProperties:false}}},
   {type:"function",function:{name:"ver_opciones_entrega",description:"Obtiene puntos, horarios y agencias válidas para ofrecer una entrega.",parameters:{type:"object",properties:{},additionalProperties:false}}},
   {type:"function",function:{name:"enviar_foto_producto",description:"Envía al cliente la segunda foto disponible de una variante ya consultada.",parameters:{type:"object",properties:{productoId:{type:"string"},varianteId:{type:"string"}},required:["productoId","varianteId"],additionalProperties:false}}},
   {type:"function",function:{name:"crear_pedido",description:"Crea el pedido y reserva stock atómicamente en el sistema central, solo después de confirmar producto, variante, cantidad, entrega y pago. En envío nacional paymentMethod debe ser QR; en punto de encuentro admite EFECTIVO o QR.",parameters:{type:"object",properties:{customerName:{type:"string"},paymentMethod:{type:"string",enum:["QR","EFECTIVO"]},items:{type:"array",items:{type:"object",properties:{productoId:{type:"string"},varianteId:{type:"string"},cantidad:{type:"integer",minimum:1}},required:["productoId","varianteId","cantidad"],additionalProperties:false}},delivery:{type:"object",properties:{method:{type:"string",enum:["PICKUP_POINT","SHIPPING_NATIONAL"]},scheduledFor:{type:"string"},pickupPointId:{type:"string"},pickupScheduleId:{type:"string"},department:{type:"string"},city:{type:"string"},shippingCompanyId:{type:"string"},branch:{type:"string"},recipientName:{type:"string"},recipientCi:{type:"string"},phone:{type:"string"}},required:["method","scheduledFor","recipientName","phone"],additionalProperties:false},notes:{type:"string"}},required:["items","delivery","paymentMethod"],additionalProperties:false}}},
@@ -30,7 +30,35 @@ function parse(value:string|undefined) { try { return value?JSON.parse(value):{}
 function unwrapProduct(result:any):Product { return (result?.data??result) as Product; }
 function availableStock(variant:Variant) { return variant.stockDisponible??((variant.stock??0)-(variant.stockReservado??0)); }
 function isAvailable(variant:Variant) { return availableStock(variant)>0; }
-function sameSize(variant:Variant,size:string) { return String(variant.talla??"").trim().toLowerCase()===size.trim().toLowerCase(); }
+export function normalizeCategory(category?:string) {
+  if(!category) return "";
+  const cat=category.trim().toLowerCase();
+  if(cat.includes("chompa")||cat.includes("sueter")||cat.includes("suéter")||cat.includes("buzo")||cat.includes("abrigo")) return "Chompas";
+  if(cat.includes("polera")||cat.includes("remera")||cat.includes("camiseta")||cat.includes("polo")) return "Poleras";
+  if(cat.includes("ruana")||cat.includes("poncho")||cat.includes("chal")) return "Ruanas";
+  if(cat.endsWith("s")) return cat.charAt(0).toUpperCase()+cat.slice(1);
+  return (cat.charAt(0).toUpperCase()+cat.slice(1))+"s";
+}
+export function parseSizes(size?:string):string[] {
+  if(!size) return [];
+  const clean=size.toLowerCase().trim();
+  if(["todas","cualquiera","todos","todas las tallas","cualquier talla","all","varias"].includes(clean)) return [];
+  return clean.split(/[,/|;\s]+|(?:\s+(?:o|y|u)\s+)/).map((s)=>s.trim().toUpperCase()).filter(Boolean);
+}
+export function isSingleSize(size?:string):boolean {
+  const parsed=parseSizes(size);
+  return parsed.length===1 && ["XS","S","M","L","XL","XXL","XXXL","U","UNICA","ESTANDAR"].includes(parsed[0]);
+}
+export function matchesSize(variant:Variant,sizeFilter?:string):boolean {
+  if(!sizeFilter) return true;
+  const parsed=parseSizes(sizeFilter);
+  if(!parsed.length) return true;
+  const vSize=String(variant.talla??"").trim().toUpperCase();
+  if(!vSize) return false;
+  if(parsed.includes(vSize)) return true;
+  if((parsed.includes("UNICA")||parsed.includes("ESTANDAR")||parsed.includes("U")) && (vSize==="U"||vSize==="UNICA"||vSize==="ESTANDAR")) return true;
+  return false;
+}
 function secondVariantImage(variant:Variant) { return variant.imagenes?.[1]??variant.imagen??variant.imagenes?.[0]; }
 function modelName(product:Product) { return product.modelo?.trim()||product.nombre; }
 function variantLabel(variant:Variant) { return [variant.color,variant.colorSecundario,variant.talla&&`Talla ${variant.talla}`].filter(Boolean).join(" · "); }
@@ -42,28 +70,36 @@ async function notifyOwner(text:string) { try { await sendTextMessage(ownerPhone
 async function sendCollage(phone:string, options:{number:number;imageUrl:string;label:string}[], caption:string) { if(!options.length) return false; await sendImageBuffer(phone,await createCatalogImage(options),caption); return true; }
 
 async function buscarModelos(args:any,ctx:Context) {
-  const products=await searchCatalog({categoria:args.categoria,talla:args.talla,color:args.color,q:args.q});
+  const category=normalizeCategory(args.categoria);
+  const sizeQuery=args.talla?String(args.talla).trim():"";
+  const singleSize=isSingleSize(sizeQuery)?parseSizes(sizeQuery)[0]:undefined;
+  const products=await searchCatalog({categoria:category||undefined,talla:singleSize,color:args.color,q:args.q});
   const models:ModelOption[]=(products as Product[]).flatMap((product)=>{
-    const representative=product.variantes?.find((variant)=>sameSize(variant,args.talla)&&isAvailable(variant));
+    const representative=product.variantes?.find((variant)=>matchesSize(variant,sizeQuery)&&isAvailable(variant));
     return representative?[{numero:0,productoId:product._id,nombre:product.nombre,modelo:modelName(product),categoria:product.categoria,precioVenta:product.precioVenta,varianteRepresentativa:representative}]:[];
   }).slice(0,10).map((model,index)=>({...model,numero:index+1}));
   const sent=await sendCollage(ctx.phone,models.flatMap((model)=>{ const imageUrl=secondVariantImage(model.varianteRepresentativa); return imageUrl?[{number:model.numero,imageUrl,label:`${model.modelo}${model.precioVenta!==undefined?` · Bs ${model.precioVenta}`:""}`}]:[]; }),"Modelos disponibles: responde con el número o nombre del modelo que prefieras.");
-  const state:SalesContext={category:args.categoria,size:args.talla,filters:Object.fromEntries(Object.entries({color:args.color,q:args.q}).filter(([,value])=>typeof value==="string"&&value.trim())),models,variants:[],selectedModel:undefined,selectedVariant:undefined,quantity:undefined,stage:"AWAIT_MODEL"};
+  const state:SalesContext={category:category||args.categoria,size:sizeQuery||undefined,filters:Object.fromEntries(Object.entries({color:args.color,q:args.q}).filter(([,value])=>typeof value==="string"&&value.trim())),models,variants:[],selectedModel:undefined,selectedVariant:undefined,quantity:undefined,stage:"AWAIT_MODEL"};
   await saveSalesContext(ctx.conversationId,state);
   return {catalogoEnviado:sent,modelos:models.map(({varianteRepresentativa,...model})=>({...model,varianteRepresentativa:{color:varianteRepresentativa.color,talla:varianteRepresentativa.talla,stockDisponible:availableStock(varianteRepresentativa)}}))};
 }
 
 async function obtenerVariantesModelo(args:any,ctx:Context) {
   const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId));
-  const variants:VariantOption[]=(product.variantes??[]).filter((variant)=>sameSize(variant,args.talla)&&isAvailable(variant)).map((variant,index)=>({numero:index+1,productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,variante:variant}));
+  const sizeFilter=args.talla||state.size;
+  let variants:VariantOption[]=(product.variantes??[]).filter((variant)=>matchesSize(variant,sizeFilter)&&isAvailable(variant)).map((variant,index)=>({numero:index+1,productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,variante:variant}));
+  if(!variants.length) {
+    variants=(product.variantes??[]).filter((variant)=>isAvailable(variant)).map((variant,index)=>({numero:index+1,productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,variante:variant}));
+  }
   const sent=await sendCollage(ctx.phone,variants.flatMap((option)=>{ const imageUrl=secondVariantImage(option.variante); return imageUrl?[{number:option.numero,imageUrl,label:variantLabel(option.variante)}]:[]; }),`Variantes disponibles de ${modelName(product)}: responde con el número o color que prefieras.`);
-  await saveSalesContext(ctx.conversationId,{...state,size:args.talla,selectedModel:{productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta},variants,selectedVariant:undefined,quantity:undefined,stage:"AWAIT_VARIANT"});
+  await saveSalesContext(ctx.conversationId,{...state,size:sizeFilter,selectedModel:{productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta},variants,selectedVariant:undefined,quantity:undefined,stage:"AWAIT_VARIANT"});
   return {catalogoEnviado:sent,modelo:{productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta},variantes:variants.map(({variante,...option})=>({...option,variante:{color:variante.color,colorSecundario:variante.colorSecundario,talla:variante.talla,descripcion:variante.descripcion,stockDisponible:availableStock(variante)}}))};
 }
 
 async function seleccionarVariante(args:any,ctx:Context) {
-  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId)); const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId&&sameSize(item,args.talla));
-  if(!variant) return {ok:false,message:"La variante elegida ya no existe para esa talla. Muestra nuevamente las variantes."};
+  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId));
+  const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId && (args.talla?matchesSize(item,args.talla):true)) ?? product.variantes?.find((item)=>item.varianteId===args.varianteId);
+  if(!variant) return {ok:false,message:"La variante elegida ya no existe. Muestra nuevamente las variantes."};
   if(!isAvailable(variant)) return {ok:false,message:"La variante elegida se agotó. Muestra las otras variantes disponibles del mismo modelo."};
   const selected={productoId:product._id,varianteId:variant.varianteId,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,color:variant.color,colorSecundario:variant.colorSecundario,talla:variant.talla,descripcion:variant.descripcion,stockDisponible:availableStock(variant)};
   await saveSalesContext(ctx.conversationId,{...state,selectedVariant:selected,quantity:undefined,stage:"AWAIT_QUANTITY"});
@@ -71,8 +107,9 @@ async function seleccionarVariante(args:any,ctx:Context) {
 }
 
 async function verificarStock(args:any,ctx:Context) {
-  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId)); const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId&&sameSize(item,args.talla));
-  if(!variant) return {ok:false,message:"La variante ya no existe para esa talla.",disponible:0};
+  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId));
+  const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId && (args.talla?matchesSize(item,args.talla):true)) ?? product.variantes?.find((item)=>item.varianteId===args.varianteId);
+  if(!variant) return {ok:false,message:"La variante ya no existe.",disponible:0};
   const disponible=availableStock(variant); const suficiente=disponible>=args.cantidad;
   const selected={productoId:product._id,varianteId:variant.varianteId,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,color:variant.color,colorSecundario:variant.colorSecundario,talla:variant.talla,descripcion:variant.descripcion,stockDisponible:disponible};
   await saveSalesContext(ctx.conversationId,{...state,selectedVariant:selected,quantity:args.cantidad,stage:suficiente?"AWAIT_DELIVERY":"AWAIT_QUANTITY"});
