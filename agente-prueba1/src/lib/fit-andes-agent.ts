@@ -30,7 +30,19 @@ function parse(value:string|undefined) { try { return value?JSON.parse(value):{}
 function unwrapProduct(result:any):Product { return (result?.data??result) as Product; }
 function availableStock(variant:Variant) { return variant.stockDisponible??((variant.stock??0)-(variant.stockReservado??0)); }
 function isAvailable(variant:Variant) { return availableStock(variant)>0; }
-function sameSize(variant:Variant,size:string) { return String(variant.talla??"").trim().toLowerCase()===size.trim().toLowerCase(); }
+function parseSizes(size?:string|null):string[] {
+  if(!size) return [];
+  let trimmed=size.trim().toLowerCase().replace(/^tallas?\s*:?\s*/i,"");
+  if(!trimmed||["todas","cualquiera","todos","todas las tallas","all"].includes(trimmed)) return [];
+  return trimmed.split(/[,/;\-|]|\s+o\s+|\s+y\s+/i).map((s)=>s.trim().replace(/^talla\s*:?\s*/i,"")).filter(Boolean);
+}
+function matchesSize(variant:Variant,size?:string|null) {
+  if(!size) return true;
+  const targetSizes=parseSizes(size);
+  if(!targetSizes.length) return true;
+  const variantSize=String(variant.talla??"").trim().toLowerCase();
+  return Boolean(variantSize&&targetSizes.includes(variantSize));
+}
 function secondVariantImage(variant:Variant) { return variant.imagenes?.[1]??variant.imagen??variant.imagenes?.[0]; }
 function modelName(product:Product) { return product.modelo?.trim()||product.nombre; }
 function variantLabel(variant:Variant) { return [variant.color,variant.colorSecundario,variant.talla&&`Talla ${variant.talla}`].filter(Boolean).join(" · "); }
@@ -42,9 +54,10 @@ async function notifyOwner(text:string) { try { await sendTextMessage(ownerPhone
 async function sendCollage(phone:string, options:{number:number;imageUrl:string;label:string}[], caption:string) { if(!options.length) return false; await sendImageBuffer(phone,await createCatalogImage(options),caption); return true; }
 
 async function buscarModelos(args:any,ctx:Context) {
-  const products=await searchCatalog({categoria:args.categoria,talla:args.talla,color:args.color,q:args.q});
+  const singleSizes=parseSizes(args.talla);
+  const products=await searchCatalog({categoria:args.categoria,color:args.color,q:args.q,limit:50,...(singleSizes.length===1?{talla:singleSizes[0]}:{})});
   const models:ModelOption[]=(products as Product[]).flatMap((product)=>{
-    const representative=product.variantes?.find((variant)=>sameSize(variant,args.talla)&&isAvailable(variant));
+    const representative=product.variantes?.find((variant)=>matchesSize(variant,args.talla)&&isAvailable(variant));
     return representative?[{numero:0,productoId:product._id,nombre:product.nombre,modelo:modelName(product),categoria:product.categoria,precioVenta:product.precioVenta,varianteRepresentativa:representative}]:[];
   }).slice(0,10).map((model,index)=>({...model,numero:index+1}));
   const sent=await sendCollage(ctx.phone,models.flatMap((model)=>{ const imageUrl=secondVariantImage(model.varianteRepresentativa); return imageUrl?[{number:model.numero,imageUrl,label:`${model.modelo}${model.precioVenta!==undefined?` · Bs ${model.precioVenta}`:""}`}]:[]; }),"Modelos disponibles: responde con el número o nombre del modelo que prefieras.");
@@ -55,27 +68,32 @@ async function buscarModelos(args:any,ctx:Context) {
 
 async function obtenerVariantesModelo(args:any,ctx:Context) {
   const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId));
-  const variants:VariantOption[]=(product.variantes??[]).filter((variant)=>sameSize(variant,args.talla)&&isAvailable(variant)).map((variant,index)=>({numero:index+1,productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,variante:variant}));
+  const sizeFilter=args.talla||state.size;
+  let matching=(product.variantes??[]).filter((variant)=>matchesSize(variant,sizeFilter)&&isAvailable(variant));
+  if(!matching.length) matching=(product.variantes??[]).filter((variant)=>isAvailable(variant));
+  const variants:VariantOption[]=matching.map((variant,index)=>({numero:index+1,productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,variante:variant}));
   const sent=await sendCollage(ctx.phone,variants.flatMap((option)=>{ const imageUrl=secondVariantImage(option.variante); return imageUrl?[{number:option.numero,imageUrl,label:variantLabel(option.variante)}]:[]; }),`Variantes disponibles de ${modelName(product)}: responde con el número o color que prefieras.`);
-  await saveSalesContext(ctx.conversationId,{...state,size:args.talla,selectedModel:{productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta},variants,selectedVariant:undefined,quantity:undefined,stage:"AWAIT_VARIANT"});
+  await saveSalesContext(ctx.conversationId,{...state,size:args.talla||state.size,selectedModel:{productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta},variants,selectedVariant:undefined,quantity:undefined,stage:"AWAIT_VARIANT"});
   return {catalogoEnviado:sent,modelo:{productoId:product._id,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta},variantes:variants.map(({variante,...option})=>({...option,variante:{color:variante.color,colorSecundario:variante.colorSecundario,talla:variante.talla,descripcion:variante.descripcion,stockDisponible:availableStock(variante)}}))};
 }
 
 async function seleccionarVariante(args:any,ctx:Context) {
-  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId)); const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId&&sameSize(item,args.talla));
-  if(!variant) return {ok:false,message:"La variante elegida ya no existe para esa talla. Muestra nuevamente las variantes."};
+  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId));
+  const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId&&(!args.talla||matchesSize(item,args.talla)))??product.variantes?.find((item)=>item.varianteId===args.varianteId);
+  if(!variant) return {ok:false,message:"La variante elegida ya no existe. Muestra nuevamente las variantes."};
   if(!isAvailable(variant)) return {ok:false,message:"La variante elegida se agotó. Muestra las otras variantes disponibles del mismo modelo."};
   const selected={productoId:product._id,varianteId:variant.varianteId,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,color:variant.color,colorSecundario:variant.colorSecundario,talla:variant.talla,descripcion:variant.descripcion,stockDisponible:availableStock(variant)};
-  await saveSalesContext(ctx.conversationId,{...state,selectedVariant:selected,quantity:undefined,stage:"AWAIT_QUANTITY"});
+  await saveSalesContext(ctx.conversationId,{...state,size:variant.talla??state.size,selectedVariant:selected,quantity:undefined,stage:"AWAIT_QUANTITY"});
   return {ok:true,variante:selected};
 }
 
 async function verificarStock(args:any,ctx:Context) {
-  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId)); const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId&&sameSize(item,args.talla));
-  if(!variant) return {ok:false,message:"La variante ya no existe para esa talla.",disponible:0};
+  const state=await getSalesContext(ctx.conversationId); const product=unwrapProduct(await productDetail(args.productoId));
+  const variant=product.variantes?.find((item)=>item.varianteId===args.varianteId&&(!args.talla||matchesSize(item,args.talla)))??product.variantes?.find((item)=>item.varianteId===args.varianteId);
+  if(!variant) return {ok:false,message:"La variante ya no existe.",disponible:0};
   const disponible=availableStock(variant); const suficiente=disponible>=args.cantidad;
   const selected={productoId:product._id,varianteId:variant.varianteId,nombre:product.nombre,modelo:modelName(product),precioVenta:product.precioVenta,color:variant.color,colorSecundario:variant.colorSecundario,talla:variant.talla,descripcion:variant.descripcion,stockDisponible:disponible};
-  await saveSalesContext(ctx.conversationId,{...state,selectedVariant:selected,quantity:args.cantidad,stage:suficiente?"AWAIT_DELIVERY":"AWAIT_QUANTITY"});
+  await saveSalesContext(ctx.conversationId,{...state,size:variant.talla??state.size,selectedVariant:selected,quantity:args.cantidad,stage:suficiente?"AWAIT_DELIVERY":"AWAIT_QUANTITY"});
   return {ok:true,suficiente,solicitada:args.cantidad,disponible,producto:selected,precioUnitario:product.precioVenta,total:(product.precioVenta??0)*args.cantidad};
 }
 
