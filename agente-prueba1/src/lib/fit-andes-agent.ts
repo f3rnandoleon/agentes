@@ -63,7 +63,7 @@ async function buscarModelos(args: any, ctx: Context) {
   const sent = await sendCollage(ctx.phone, models.flatMap((model) => { const imageUrl = secondVariantImage(model.varianteRepresentativa); return imageUrl ? [{ number: model.numero, imageUrl, label: `${model.modelo}${model.precioVenta !== undefined ? ` · Bs ${model.precioVenta}` : ""}` }] : []; }), "Modelos disponibles: responde con el número o nombre del modelo que prefieras.");
   const state: SalesContext = { category: args.categoria, size: args.talla, filters: Object.fromEntries(Object.entries({ color: args.color, q: args.q }).filter(([, value]) => typeof value === "string" && value.trim())), models, variants: [], selectedModel: undefined, selectedVariant: undefined, quantity: undefined, stage: "AWAIT_MODEL" };
   await saveSalesContext(ctx.conversationId, state);
-  return { catalogoEnviado: sent, modelos: models.map(({ varianteRepresentativa, ...model }) => ({ ...model, varianteRepresentativa: { color: varianteRepresentativa.color, talla: varianteRepresentativa.talla, stockDisponible: availableStock(varianteRepresentativa) } })) };
+  return { catalogoEnviado: sent, mensaje: sent ? "El catálogo visual ya fue enviado al WhatsApp del cliente con números y pie de foto. No envíes texto adicional." : "No se pudo enviar el catálogo visual.", modelos: models.map(({ varianteRepresentativa, ...model }) => ({ ...model, varianteRepresentativa: { color: varianteRepresentativa.color, talla: varianteRepresentativa.talla, stockDisponible: availableStock(varianteRepresentativa) } })) };
 }
 
 async function obtenerVariantesModelo(args: any, ctx: Context) {
@@ -74,7 +74,7 @@ async function obtenerVariantesModelo(args: any, ctx: Context) {
   const variants: VariantOption[] = matching.map((variant, index) => ({ numero: index + 1, productoId: product._id, nombre: product.nombre, modelo: modelName(product), precioVenta: product.precioVenta, variante: variant }));
   const sent = await sendCollage(ctx.phone, variants.flatMap((option) => { const imageUrl = secondVariantImage(option.variante); return imageUrl ? [{ number: option.numero, imageUrl, label: variantLabel(option.variante) }] : []; }), `Variantes disponibles de ${modelName(product)}: responde con el número o color que prefieras.`);
   await saveSalesContext(ctx.conversationId, { ...state, size: args.talla || state.size, selectedModel: { productoId: product._id, nombre: product.nombre, modelo: modelName(product), precioVenta: product.precioVenta }, variants, selectedVariant: undefined, quantity: undefined, stage: "AWAIT_VARIANT" });
-  return { catalogoEnviado: sent, modelo: { productoId: product._id, nombre: product.nombre, modelo: modelName(product), precioVenta: product.precioVenta }, variantes: variants.map(({ variante, ...option }) => ({ ...option, variante: { color: variante.color, colorSecundario: variante.colorSecundario, talla: variante.talla, descripcion: variante.descripcion, stockDisponible: availableStock(variante) } })) };
+  return { catalogoEnviado: sent, mensaje: sent ? "El catálogo de variantes ya fue enviado al WhatsApp del cliente con números y pie de foto. No envíes texto adicional." : "No se pudo enviar el catálogo visual.", modelo: { productoId: product._id, nombre: product.nombre, modelo: modelName(product), precioVenta: product.precioVenta }, variantes: variants.map(({ variante, ...option }) => ({ ...option, variante: { color: variante.color, colorSecundario: variante.colorSecundario, talla: variante.talla, descripcion: variante.descripcion, stockDisponible: availableStock(variante) } })) };
 }
 
 async function seleccionarVariante(args: any, ctx: Context) {
@@ -114,8 +114,32 @@ async function runTool(name: string, args: any, ctx: Context) {
 export async function respondToFitAndes(history: { role: string; content: string }[], ctx: Context) {
   const state = await getSalesContext(ctx.conversationId);
   const messages: any[] = [{ role: "system", content: `${SYSTEM_PROMPT}${contextForPrompt(state)}` }, ...history.map((message) => ({ role: message.role === "user" ? "user" : "assistant", content: message.content }))];
-  for (let round = 0; round < 6; round++) { const completion = await client().chat.completions.create({ model: process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini", messages, tools, tool_choice: "auto" }); const message: any = completion.choices[0]?.message; if (!message) throw new Error("OpenRouter no devolvió una respuesta"); messages.push(message); if (!message.tool_calls?.length) return message.content?.trim() || "Déjame derivarte con un asesor humano."; for (const call of message.tool_calls) { let result: unknown; try { result = await runTool(call.function.name, parse(call.function.arguments), ctx); } catch (error) { result = { ok: false, message: error instanceof Error ? error.message : "No se pudo consultar el sistema" }; } messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) }); } }
-  return "Estoy verificando los detalles con el sistema. Un asesor te ayudará enseguida.";
+  let visualCatalogSent = false;
+  for (let round = 0; round < 6; round++) {
+    const completion = await client().chat.completions.create({ model: process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini", messages, tools, tool_choice: "auto" });
+    const message: any = completion.choices[0]?.message;
+    if (!message) throw new Error("OpenRouter no devolvió una respuesta");
+    messages.push(message);
+    if (!message.tool_calls?.length) {
+      if (visualCatalogSent) return "";
+      return message.content?.trim() || "Déjame derivarte con un asesor humano.";
+    }
+    for (const call of message.tool_calls) {
+      let result: unknown;
+      try {
+        result = await runTool(call.function.name, parse(call.function.arguments), ctx);
+        if (call.function.name === "buscar_modelos" || call.function.name === "obtener_variantes_modelo") {
+          if ((result as any)?.catalogoEnviado) {
+            visualCatalogSent = true;
+          }
+        }
+      } catch (error) {
+        result = { ok: false, message: error instanceof Error ? error.message : "No se pudo consultar el sistema" };
+      }
+      messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+    }
+  }
+  return visualCatalogSent ? "" : "Estoy verificando los detalles con el sistema. Un asesor te ayudará enseguida.";
 }
 
 export async function registerPaymentProof(ctx: Context, mediaId: string) { const order = await latestPendingWhatsAppOrder(ctx.conversationId); if (!order) return "No encuentro un pedido pendiente de pago en este chat. Envíame primero el número de pedido o pide ayuda a un asesor."; const media = await downloadWhatsAppMedia(mediaId); const result = await uploadPaymentProof(order.pago_id, media.bytes, media.mimeType); await setWhatsAppOrderStatus(order.numero_pedido, "PROOF_UPLOADED"); if (result.notification?.text) await notifyOwner(result.notification.text); return `Listo, registramos tu comprobante del pedido ${order.numero_pedido}. Un asesor validará el pago y te confirmará por este medio.`; }

@@ -16,8 +16,13 @@ export async function handleIncomingMessage(msg:any, name:string|null) {
   const started=Date.now();
   const reply=msg.type==="image" ? await registerPaymentProof({phone:conversation.phone,name,conversationId:conversation.id,messageId:msg.id},msg.image?.id) : await respondToFitAndes(await getRecentHistory(conversation.id),{phone:conversation.phone,name,conversationId:conversation.id,messageId:msg.id});
   console.log(`[wh] atención Fit Andes en ${Date.now()-started}ms`);
-  const replyId=await insertMessage(conversation.id,"assistant",reply);
-  const sent=await sendTextMessage(conversation.phone,reply);
-  await updateMessageWaId(replyId,sent.wa_message_id);
-  console.log(`[wh] enviado a ${conversation.phone} (wamid: ${sent.wa_message_id})`);
+  if (reply && reply.trim()) {
+    const replyId = await insertMessage(conversation.id, "assistant", reply.trim());
+    const sent = await sendTextMessage(conversation.phone, reply.trim());
+    await updateMessageWaId(replyId, sent.wa_message_id);
+    console.log(`[wh] enviado a ${conversation.phone} (wamid: ${sent.wa_message_id})`);
+  } else {
+    await insertMessage(conversation.id, "assistant", "[Catálogo enviado con imagen]");
+    console.log(`[wh] catálogo visual enviado a ${conversation.phone}, omitiendo texto redundante`);
+  }
 }
