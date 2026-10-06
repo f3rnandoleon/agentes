@@ -16,6 +16,10 @@ export async function handleIncomingMessage(msg:any, name:string|null) {
   const started=Date.now();
   const reply=msg.type==="image" ? await registerPaymentProof({phone:conversation.phone,name,conversationId:conversation.id,messageId:msg.id},msg.image?.id) : await respondToFitAndes(await getRecentHistory(conversation.id),{phone:conversation.phone,name,conversationId:conversation.id,messageId:msg.id});
   console.log(`[wh] atención Fit Andes en ${Date.now()-started}ms`);
+  if (!reply || !reply.trim()) {
+    console.log(`[wh] respuesta de texto vacía (collage enviado con su pie de foto), no se envía texto adicional.`);
+    return;
+  }
   const replyId=await insertMessage(conversation.id,"assistant",reply);
   const sent=await sendTextMessage(conversation.phone,reply);
   await updateMessageWaId(replyId,sent.wa_message_id);
