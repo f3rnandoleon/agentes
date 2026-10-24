@@ -23,7 +23,6 @@ import {
 } from "./db";
 import { downloadWhatsAppMedia, sendImageBuffer, sendImageMessage, sendTextMessage } from "./meta/client";
 import { SYSTEM_PROMPT } from "./system-prompt";
-import { DEFAULT_MODEL, getOpenRouterModel } from "./openrouter";
 
 type Context = { phone: string; name: string | null; conversationId: number; messageId: string };
 type ModelOption = {
@@ -780,33 +779,12 @@ export async function respondToFitAndes(history: { role: string; content: string
   let collageSentInTurn = false;
 
   for (let round = 0; round < 6; round++) {
-    const model = getOpenRouterModel();
-    let completion: any;
-    try {
-      completion = await client().chat.completions.create({
-        model,
-        messages,
-        tools,
-        tool_choice: "auto"
-      });
-    } catch (err: any) {
-      if (
-        model !== DEFAULT_MODEL &&
-        (err?.status === 404 || err?.message?.includes("no provider serves this model"))
-      ) {
-        console.warn(
-          `[agent] Modelo ${model} no disponible en OpenRouter. Reintentando con ${DEFAULT_MODEL}...`
-        );
-        completion = await client().chat.completions.create({
-          model: DEFAULT_MODEL,
-          messages,
-          tools,
-          tool_choice: "auto"
-        });
-      } else {
-        throw err;
-      }
-    }
+    const completion = await client().chat.completions.create({
+      model: process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini",
+      messages,
+      tools,
+      tool_choice: "auto"
+    });
     const message: any = completion.choices[0]?.message;
     if (!message) throw new Error("OpenRouter no devolvió una respuesta");
     messages.push(message);

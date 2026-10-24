@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import { DEFAULT_MODEL, getOpenRouterModel } from "./openrouter";
 
 export type ClothingDetails = {
   color?: string;
@@ -46,13 +45,13 @@ export async function analyzeIncomingImage(
     const dataUrl = `data:${safeMime};base64,${base64}`;
 
     const client = getOpenAIClient();
-    const model = getOpenRouterModel();
+    const model = process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini";
 
-    const requestPayload = (modelName: string) => ({
-      model: modelName,
+    const response = await client.chat.completions.create({
+      model,
       messages: [
         {
-          role: "system" as const,
+          role: "system",
           content: `Eres un asistente clasificador y estilista experto de Fit Andes, una tienda de ropa en Bolivia (especializada en chompas de alpaca, poleras, ruanas y ropa de invierno).
 Tu tarea es analizar detalladamente una imagen enviada por un cliente en WhatsApp y determinar cuál de las siguientes tres categorías describe mejor la imagen:
 
@@ -80,14 +79,14 @@ Debes responder ÚNICAMENTE con un JSON válido con la siguiente estructura exac
 }`
         },
         {
-          role: "user" as const,
+          role: "user",
           content: [
             {
-              type: "text" as const,
+              type: "text",
               text: "Clasifica y analiza esta imagen enviada por el cliente:"
             },
             {
-              type: "image_url" as const,
+              type: "image_url",
               image_url: {
                 url: dataUrl
               }
@@ -96,25 +95,8 @@ Debes responder ÚNICAMENTE con un JSON válido con la siguiente estructura exac
         }
       ],
       max_tokens: 450,
-      response_format: { type: "json_object" as const }
+      response_format: { type: "json_object" }
     });
-
-    let response: any;
-    try {
-      response = await client.chat.completions.create(requestPayload(model));
-    } catch (err: any) {
-      if (
-        model !== DEFAULT_MODEL &&
-        (err?.status === 404 || err?.message?.includes("no provider serves this model"))
-      ) {
-        console.warn(
-          `[vision] Modelo ${model} no disponible en OpenRouter. Reintentando visión con ${DEFAULT_MODEL}...`
-        );
-        response = await client.chat.completions.create(requestPayload(DEFAULT_MODEL));
-      } else {
-        throw err;
-      }
-    }
 
     const raw = response.choices[0]?.message?.content?.trim();
     if (!raw) {
