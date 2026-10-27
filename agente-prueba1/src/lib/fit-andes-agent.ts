@@ -3,7 +3,7 @@ import { createCatalogImage } from "./catalog-image";
 import { createWhatsAppOrder, deliveryOptions, orderStatus, productDetail, searchCatalog, uploadPaymentProof } from "./fit-andes-api";
 import { getSalesContext, latestPendingWhatsAppOrder, saveSalesContext, saveWhatsAppOrder, setMode, setWhatsAppOrderStatus, type SalesContext } from "./db";
 import { downloadWhatsAppMedia, sendImageBuffer, sendImageMessage, sendTextMessage } from "./meta/client";
-import { SYSTEM_PROMPT } from "./system-prompt";
+import { getSystemPrompt } from "./system-prompt";
 
 type Context = { phone: string; name: string | null; conversationId: number; messageId: string };
 type Variant = { varianteId: string; color?: string; colorSecundario?: string; talla?: string; stock?: number; stockReservado?: number; stockDisponible?: number; descripcion?: string; imagen?: string; imagenes?: string[] };
@@ -545,8 +545,9 @@ async function runTool(name: string, args: any, ctx: Context) {
 
 export async function respondToFitAndes(history: { role: string; content: string }[], ctx: Context) {
   const state = await getSalesContext(ctx.conversationId);
+  const activePrompt = await getSystemPrompt();
   const messages: any[] = [
-    { role: "system", content: `${SYSTEM_PROMPT}${contextForPrompt(state)}` },
+    { role: "system", content: `${activePrompt}${contextForPrompt(state)}` },
     ...history.map((message) => ({ role: message.role === "user" ? "user" : "assistant", content: message.content }))
   ];
   let collageSentInTurn = false;

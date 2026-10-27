@@ -186,3 +186,26 @@ export async function saveSalesContext(conversationId: number, state: SalesConte
     fail(error);
   });
 }
+
+export async function getSetting(key: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase().from("system_settings").select("value").eq("key", key).maybeSingle();
+    if (error) return null;
+    return (data?.value as string) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setSetting(key: string, value: string): Promise<boolean> {
+  try {
+    const { error } = await supabase().from("system_settings").upsert({
+      key,
+      value,
+      updated_at: Math.floor(Date.now() / 1000)
+    }, { onConflict: "key" });
+    return !error;
+  } catch {
+    return false;
+  }
+}
