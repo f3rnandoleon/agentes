@@ -88,12 +88,28 @@ const AVAILABLE_TOOLS = [
     ruleSnippet: "10. cancelar_compra: Limpia la selección temporal cuando el cliente cancela o desea reiniciar la compra."
   },
   {
+    name: "consultar_medidas",
+    category: "Catálogo",
+    badgeColor: "bg-blue-50 text-blue-700 border-blue-200",
+    desc: "Obtiene las medidas exactas en cm (pecho, hombro, largo, mangas) para asesorar al cliente con la talla adecuada.",
+    params: "productoId",
+    ruleSnippet: "- consultar_medidas: Consulta medidas anatómicas en cm de un modelo para asesorar sobre la talla correcta según contextura."
+  },
+  {
     name: "derivar_humano",
     category: "Soporte",
     badgeColor: "bg-amber-50 text-amber-700 border-amber-200",
     desc: "Transfiere la conversación a un asesor humano y notifica al dueño por WhatsApp (+591 67113105).",
     params: "motivo",
     ruleSnippet: "11. derivar_humano: Transfiere la conversación al asesor humano ante casos especiales, reclamos o peticiones expresas."
+  },
+  {
+    name: "consultar_politicas",
+    category: "Soporte",
+    badgeColor: "bg-amber-50 text-amber-700 border-amber-200",
+    desc: "Consulta las políticas oficiales de Fit Andes sobre cambios, devoluciones, garantías y envíos.",
+    params: "Ninguno",
+    ruleSnippet: "- consultar_politicas: Consulta políticas oficiales de la tienda ante dudas de cambios, devoluciones o envíos."
   }
 ];
 

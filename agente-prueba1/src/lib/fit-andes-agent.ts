@@ -23,6 +23,7 @@ import {
 } from "./db";
 import { downloadWhatsAppMedia, sendImageBuffer, sendImageMessage, sendTextMessage } from "./meta/client";
 import { getSystemPrompt } from "./system-prompt";
+import { DEFAULT_MODEL, getOpenRouterModel } from "./openrouter";
 
 type Context = { phone: string; name: string | null; conversationId: number; messageId: string };
 type ModelOption = {
