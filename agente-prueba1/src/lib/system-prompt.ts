@@ -1,7 +1,8 @@
 import fs from "fs/promises";
 import fsSync from "fs";
+import os from "os";
 import path from "path";
-import { getSetting, setSetting } from "./db";
+import { getSettingWithMeta, setSetting } from "./db";
 
 export const DEFAULT_SYSTEM_PROMPT = `# SYSTEM PROMPT — VENDEDOR IA FITANDES
 
@@ -73,11 +74,49 @@ Adapta el flujo a la conversación. Si el cliente ya proporcionó información, 
 
 export const SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT;
 
-function getPromptFilePath(): string {
-   return path.join(process.cwd(), "data", "system-prompt.txt");
+function getCandidatePromptFilePaths(): string[] {
+   const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.cwd().startsWith("/var/task"));
+   const localDataPath = path.join(process.cwd(), "data", "system-prompt.txt");
+   const tmpDataPath = path.join(os.tmpdir(), "fitandes-system-prompt.txt");
+   return isServerless ? [tmpDataPath, localDataPath] : [localDataPath, tmpDataPath];
 }
 
-let memoryPromptCache: { prompt: string; timestamp: number } | null = null;
+async function readLocalPromptFile(): Promise<{ content: string; updatedAt: number } | null> {
+   for (const filePath of getCandidatePromptFilePaths()) {
+      try {
+         if (fsSync.existsSync(filePath)) {
+            const [content, stat] = await Promise.all([
+               fs.readFile(filePath, "utf-8"),
+               fs.stat(filePath)
+            ]);
+            if (content && content.trim().length > 0) {
+               return { content: content.trim(), updatedAt: stat.mtimeMs };
+            }
+         }
+      } catch {
+         // Ignorar y probar la siguiente ruta candidata
+      }
+   }
+   return null;
+}
+
+async function writeLocalPromptFile(content: string): Promise<boolean> {
+   for (const filePath of getCandidatePromptFilePaths()) {
+      try {
+         const dirPath = path.dirname(filePath);
+         if (!fsSync.existsSync(dirPath)) {
+            await fs.mkdir(dirPath, { recursive: true });
+         }
+         await fs.writeFile(filePath, content, "utf-8");
+         return true;
+      } catch {
+         // En entornos serverless de solo lectura (/var/task), continúa al fallback en /tmp
+      }
+   }
+   return false;
+}
+
+let memoryPromptCache: { prompt: string; timestamp: number; updatedAt: number | null } | null = null;
 
 export async function getSystemPrompt(): Promise<string> {
    // 1. Check in-memory cache if fresh (within 5 seconds)
@@ -88,24 +127,21 @@ export async function getSystemPrompt(): Promise<string> {
 
    // 2. Try DB setting (Supabase) if available
    try {
-      const dbValue = await getSetting("system_prompt");
+      const { value: dbValue, updatedAt } = await getSettingWithMeta("system_prompt");
       if (dbValue && typeof dbValue === "string" && dbValue.trim().length > 0) {
-         memoryPromptCache = { prompt: dbValue.trim(), timestamp: now };
+         memoryPromptCache = { prompt: dbValue.trim(), timestamp: now, updatedAt };
          return memoryPromptCache.prompt;
       }
    } catch (err) {
       console.warn("[system-prompt] No se pudo leer de Supabase:", err);
    }
 
-   // 3. Try reading from persistent local file
+   // 3. Try reading from local / tmp file
    try {
-      const filePath = getPromptFilePath();
-      if (fsSync.existsSync(filePath)) {
-         const content = await fs.readFile(filePath, "utf-8");
-         if (content && content.trim().length > 0) {
-            memoryPromptCache = { prompt: content.trim(), timestamp: now };
-            return memoryPromptCache.prompt;
-         }
+      const localData = await readLocalPromptFile();
+      if (localData) {
+         memoryPromptCache = { prompt: localData.content, timestamp: now, updatedAt: localData.updatedAt };
+         return memoryPromptCache.prompt;
       }
    } catch (err) {
       console.warn("[system-prompt] No se pudo leer archivo local:", err);
@@ -122,45 +158,30 @@ export async function saveSystemPrompt(newPrompt: string): Promise<{ success: bo
    }
 
    const now = Date.now();
-   const filePath = getPromptFilePath();
-   const dirPath = path.dirname(filePath);
 
-   // 1. Ensure directory exists and write to local file
+   // 1. Guardar en Supabase (persistencia principal en producción / Vercel)
+   let savedInDb = false;
    try {
-      if (!fsSync.existsSync(dirPath)) {
-         await fs.mkdir(dirPath, { recursive: true });
-      }
-      await fs.writeFile(filePath, trimmed, "utf-8");
-   } catch (err) {
-      console.error("[system-prompt] Error guardando archivo local:", err);
-      throw new Error("No se pudo guardar el archivo del system prompt.");
-   }
-
-   // 2. Try saving to Supabase (best-effort)
-   try {
-      await setSetting("system_prompt", trimmed);
+      savedInDb = await setSetting("system_prompt", trimmed);
    } catch (err) {
       console.warn("[system-prompt] No se pudo sincronizar con Supabase:", err);
    }
 
-   // 3. Update memory cache immediately
-   memoryPromptCache = { prompt: trimmed, timestamp: now };
+   // 2. Guardar en archivo local o /tmp (fallback en entornos serverless donde /var/task es de solo lectura)
+   const savedInFile = await writeLocalPromptFile(trimmed);
+
+   if (!savedInDb && !savedInFile) {
+      throw new Error("No se pudo guardar el System Prompt ni en la base de datos ni en el almacenamiento local.");
+   }
+
+   // 3. Actualizar caché en memoria inmediatamente
+   memoryPromptCache = { prompt: trimmed, timestamp: now, updatedAt: now };
 
    return { success: true, updatedAt: now };
 }
 
 export async function resetSystemPrompt(): Promise<string> {
-   const filePath = getPromptFilePath();
-   const dirPath = path.dirname(filePath);
-
-   try {
-      if (!fsSync.existsSync(dirPath)) {
-         await fs.mkdir(dirPath, { recursive: true });
-      }
-      await fs.writeFile(filePath, DEFAULT_SYSTEM_PROMPT, "utf-8");
-   } catch (err) {
-      console.error("[system-prompt] Error reseteando archivo local:", err);
-   }
+   const now = Date.now();
 
    try {
       await setSetting("system_prompt", DEFAULT_SYSTEM_PROMPT);
@@ -168,22 +189,28 @@ export async function resetSystemPrompt(): Promise<string> {
       console.warn("[system-prompt] Error reseteando en Supabase:", err);
    }
 
-   memoryPromptCache = { prompt: DEFAULT_SYSTEM_PROMPT, timestamp: Date.now() };
+   await writeLocalPromptFile(DEFAULT_SYSTEM_PROMPT);
+
+   memoryPromptCache = { prompt: DEFAULT_SYSTEM_PROMPT, timestamp: now, updatedAt: now };
    return DEFAULT_SYSTEM_PROMPT;
 }
 
 export async function getPromptMetadata() {
    const currentPrompt = await getSystemPrompt();
-   const filePath = getPromptFilePath();
-   let updatedAt: number | null = null;
+   let updatedAt: number | null = memoryPromptCache?.updatedAt ?? null;
 
-   try {
-      if (fsSync.existsSync(filePath)) {
-         const stat = await fs.stat(filePath);
-         updatedAt = stat.mtimeMs;
+   if (!updatedAt) {
+      try {
+         const { updatedAt: dbUpdatedAt } = await getSettingWithMeta("system_prompt");
+         if (dbUpdatedAt) updatedAt = dbUpdatedAt;
+      } catch {
+         // Ignore
       }
-   } catch {
-      updatedAt = null;
+   }
+
+   if (!updatedAt) {
+      const localData = await readLocalPromptFile();
+      if (localData) updatedAt = localData.updatedAt;
    }
 
    return {

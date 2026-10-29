@@ -12,6 +12,8 @@ export type SalesContext = {
   quantity?: number; stage?: string;
 };
 
+const SYSTEM_CONFIG_PHONE = "__system_config__";
+
 let client: SupabaseClient | undefined;
 function supabase() {
   if (client) return client;
@@ -115,7 +117,12 @@ export async function setMode(id: number, mode: Mode) {
 
 export async function listConversations(): Promise<Conversation[]> {
   return withRetry(async () => {
-    const { data, error } = await supabase().from("conversation_summaries").select("*").order("last_message_at", { ascending: false, nullsFirst: false }).order("id", { ascending: false });
+    const { data, error } = await supabase()
+      .from("conversation_summaries")
+      .select("*")
+      .neq("phone", SYSTEM_CONFIG_PHONE)
+      .order("last_message_at", { ascending: false, nullsFirst: false })
+      .order("id", { ascending: false });
     fail(error);
     return (data ?? []) as Conversation[];
   });
@@ -187,24 +194,117 @@ export async function saveSalesContext(conversationId: number, state: SalesConte
   });
 }
 
-export async function getSetting(key: string): Promise<string | null> {
+async function getOrCreateSystemConfigConversationId(): Promise<number> {
+  const db = supabase();
+  const { data: existing, error: lookupError } = await db
+    .from("conversations")
+    .select("id")
+    .eq("phone", SYSTEM_CONFIG_PHONE)
+    .maybeSingle();
+  fail(lookupError);
+  if (existing) return Number(existing.id);
+
+  const { data: created, error: createError } = await db
+    .from("conversations")
+    .insert({ phone: SYSTEM_CONFIG_PHONE, name: "System Config", mode: "AI" })
+    .select("id")
+    .single();
+  fail(createError);
+  if (!created) throw new Error("Supabase no devolvió la configuración creada");
+  return Number(created.id);
+}
+
+export async function getSettingWithMeta(key: string): Promise<{ value: string | null; updatedAt: number | null }> {
   try {
-    const { data, error } = await supabase().from("system_settings").select("value").eq("key", key).maybeSingle();
-    if (error) return null;
-    return (data?.value as string) ?? null;
+    const db = supabase();
+    const { data, error } = await db
+      .from("system_settings")
+      .select("value, updated_at")
+      .eq("key", key)
+      .maybeSingle();
+
+    if (!error) {
+      if (!data) return { value: null, updatedAt: null };
+      const updatedAt = data.updated_at ? Number(data.updated_at) * 1000 : null;
+      return { value: (data.value as string) ?? null, updatedAt };
+    }
+
+    // Fallback en Supabase usando sales_contexts si la tabla system_settings no existe aún
+    const { data: conv } = await db
+      .from("conversations")
+      .select("id")
+      .eq("phone", SYSTEM_CONFIG_PHONE)
+      .maybeSingle();
+    if (!conv) return { value: null, updatedAt: null };
+
+    const { data: ctx, error: ctxErr } = await db
+      .from("sales_contexts")
+      .select("state, updated_at")
+      .eq("conversation_id", conv.id)
+      .maybeSingle();
+    if (ctxErr || !ctx) return { value: null, updatedAt: null };
+
+    const state = (ctx.state ?? {}) as Record<string, unknown>;
+    const val = typeof state[key] === "string" ? (state[key] as string) : null;
+    const updatedAt =
+      typeof state[`${key}_updated_at`] === "number"
+        ? (state[`${key}_updated_at`] as number)
+        : ctx.updated_at
+          ? Number(ctx.updated_at) * 1000
+          : null;
+    return { value: val, updatedAt };
   } catch {
-    return null;
+    return { value: null, updatedAt: null };
   }
+}
+
+export async function getSetting(key: string): Promise<string | null> {
+  const { value } = await getSettingWithMeta(key);
+  return value;
 }
 
 export async function setSetting(key: string, value: string): Promise<boolean> {
   try {
-    const { error } = await supabase().from("system_settings").upsert({
-      key,
-      value,
-      updated_at: Math.floor(Date.now() / 1000)
-    }, { onConflict: "key" });
-    return !error;
+    const db = supabase();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const { error } = await db.from("system_settings").upsert(
+      {
+        key,
+        value,
+        updated_at: nowSec
+      },
+      { onConflict: "key" }
+    );
+    if (!error) return true;
+
+    // Fallback en Supabase usando sales_contexts si la tabla system_settings no existe aún
+    const convId = await getOrCreateSystemConfigConversationId();
+    const { data: existingCtx } = await db
+      .from("sales_contexts")
+      .select("state")
+      .eq("conversation_id", convId)
+      .maybeSingle();
+
+    const currentState =
+      existingCtx?.state && typeof existingCtx.state === "object"
+        ? (existingCtx.state as Record<string, unknown>)
+        : {};
+
+    const nextState = {
+      ...currentState,
+      [key]: value,
+      [`${key}_updated_at`]: Date.now()
+    };
+
+    const { error: upsertErr } = await db.from("sales_contexts").upsert(
+      {
+        conversation_id: convId,
+        state: nextState,
+        updated_at: nowSec
+      },
+      { onConflict: "conversation_id" }
+    );
+    return !upsertErr;
   } catch {
     return false;
   }
